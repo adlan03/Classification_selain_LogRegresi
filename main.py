@@ -25,7 +25,10 @@ def load_dataset(csv_path: str):
     except Exception:
         return pd.read_csv(p)
 
-def prepare_features(df: pd.DataFrame, drop_cols, target_col):
+# =========================
+# FEATURE ENGINEERING (tampilkan di Streamlit)
+# =========================
+def add_feature_engineering(df: pd.DataFrame):
     df = df.copy()
 
     needed_cols = {"Order Date", "Ship Date"}
@@ -33,38 +36,48 @@ def prepare_features(df: pd.DataFrame, drop_cols, target_col):
         missing = needed_cols - set(df.columns)
         raise ValueError(f"Kolom wajib tidak ada: {', '.join(missing)}")
 
+    # convert date
     df["Order Date"] = pd.to_datetime(df["Order Date"], errors="coerce")
     df["Ship Date"]  = pd.to_datetime(df["Ship Date"], errors="coerce")
 
+    # engineered features
     df["OrderYear"]  = df["Order Date"].dt.year
     df["OrderMonth"] = df["Order Date"].dt.month
     df["ShipDays"]   = (df["Ship Date"] - df["Order Date"]).dt.days
 
+    # handle NaN shipdays
     if df["ShipDays"].isna().any():
         df["ShipDays"] = df["ShipDays"].fillna(df["ShipDays"].median())
 
+    return df
+
+def prepare_features(df_enriched: pd.DataFrame, drop_cols, target_col):
+    df = df_enriched.copy()
+
+    # drop kolom sesuai training
     for c in drop_cols:
         if c in df.columns:
             df = df.drop(columns=[c])
 
+    # jika ada label asli, buang (mode prediksi)
     if target_col in df.columns:
         df = df.drop(columns=[target_col])
 
     return df
 
 # =========================
-# UI: HEADER
+# UI HEADER
 # =========================
 st.title("📌 Aplikasi Prediksi Segment Pelanggan — Superstore")
 st.markdown(
     """
-Aplikasi ini dibuat untuk **memprediksi Segment pelanggan** pada data Superstore (**Consumer / Corporate / Home Office**).
-Tujuannya: membantu memahami **tipe pelanggan** dari transaksi, sehingga analisis dan strategi pemasaran lebih tepat.
+Aplikasi ini memprediksi **Segment pelanggan** pada Superstore (**Consumer / Corporate / Home Office**).
+Model sudah dilatih sebelumnya dan disimpan sebagai **PKL**, jadi di aplikasi ini **tidak training lagi** — hanya **load + predict**.
 """
 )
 
 # =========================
-# SIDEBAR: PATH FILE (tanpa upload)
+# SIDEBAR PATH
 # =========================
 st.sidebar.header("⚙️ Sumber File (tanpa upload)")
 pkl_path = st.sidebar.text_input("File model (.pkl)", "superstore_segment_voting.pkl")
@@ -72,12 +85,8 @@ csv_path = st.sidebar.text_input("File dataset (.csv)", "Sample - Superstore.csv
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🧠 Model")
-st.sidebar.write(
-    """
-✅ Ensemble: **Voting Classifier**  
-✅ Tanpa **DT**, **KNN**, **Logistic Regression**  
-"""
-)
+st.sidebar.write("✅ Ensemble: Voting Classifier")
+st.sidebar.write("✅ Tanpa DT, tanpa KNN, tanpa Logistic Regression")
 
 # Load model
 try:
@@ -99,25 +108,62 @@ except Exception as e:
     st.stop()
 
 # =========================
-# TAMPILKAN DATASET
+# DATASET OVERVIEW
 # =========================
 c1, c2, c3 = st.columns(3)
 c1.metric("Jumlah Baris", f"{df_raw.shape[0]:,}")
 c2.metric("Jumlah Kolom", f"{df_raw.shape[1]}")
 c3.metric("Target", "Segment")
 
-st.subheader("🔎 Preview Dataset (20 baris pertama)")
-st.dataframe(df_raw.head(20), use_container_width=True)
+st.subheader("🔎 Preview Dataset Asli (sebelum Feature Engineering)")
+st.dataframe(df_raw.head(15), use_container_width=True)
+
+# =========================
+# FEATURE ENGINEERING DISPLAY
+# =========================
+st.markdown("---")
+st.header("🛠️ Feature Engineering yang Dipakai")
+
+st.markdown(
+    """
+Di tahap ini, kolom tanggal **Order Date** dan **Ship Date** diubah menjadi fitur yang lebih “siap” dipakai model:
+- **OrderYear**: tahun pemesanan  
+- **OrderMonth**: bulan pemesanan  
+- **ShipDays**: selisih hari antara pengiriman dan pemesanan  
+"""
+)
+
+try:
+    df_enriched = add_feature_engineering(df_raw)
+
+    # tampilkan hasil feature engineering (kolom penting)
+    st.subheader("Hasil Feature Engineering (contoh 20 baris)")
+    show_cols = [c for c in ["Order Date", "Ship Date", "OrderYear", "OrderMonth", "ShipDays"] if c in df_enriched.columns]
+    st.dataframe(df_enriched[show_cols].head(20), use_container_width=True)
+
+    # ringkasan statistik ShipDays (biar mudah dipresentasi)
+    st.subheader("Ringkasan ShipDays")
+    st.write(df_enriched["ShipDays"].describe())
+
+    # optional: tampilkan list fitur yang dipakai model setelah drop
+    with st.expander("Lihat kolom input yang dipakai model (setelah drop kolom ID)"):
+        X_for_model = prepare_features(df_enriched, drop_cols, target_col)
+        st.write("Jumlah kolom input ke model:", X_for_model.shape[1])
+        st.write(list(X_for_model.columns))
+
+except Exception as e:
+    st.error(f"❌ Feature engineering gagal: {e}")
+    st.stop()
 
 # =========================
 # PREDIKSI
 # =========================
 st.markdown("---")
-st.subheader("🚀 Jalankan Prediksi")
+st.header("🚀 Prediksi Segment")
 
 if st.button("Prediksi Segment", type="primary"):
     try:
-        X_pred = prepare_features(df_raw, drop_cols, target_col)
+        X_pred = prepare_features(df_enriched, drop_cols, target_col)
         preds = model.predict(X_pred)
 
         out = df_raw.copy()
@@ -128,14 +174,6 @@ if st.button("Prediksi Segment", type="primary"):
         with tab1:
             st.subheader("Distribusi Hasil Prediksi")
             st.write(out["Predicted Segment"].value_counts())
-
-            st.markdown(
-                """
-**Cara baca ringkasan:**
-- Angka menunjukkan **jumlah transaksi** yang diprediksi masuk ke tiap segment.
-- Ini membantu melihat **segment dominan** pada data Superstore.
-"""
-            )
 
         with tab2:
             st.subheader("Preview Hasil Prediksi (50 baris)")
@@ -151,5 +189,6 @@ if st.button("Prediksi Segment", type="primary"):
             )
 
         st.success("✅ Prediksi selesai!")
+
     except Exception as e:
         st.error(f"❌ Error saat prediksi: {e}")
