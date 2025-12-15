@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 import joblib
 from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
+
 
 st.set_page_config(page_title="Superstore - Klasifikasi & Regresi", layout="wide")
 
@@ -418,3 +422,4 @@ else:
                 st.success("✅ Prediksi massal selesai!")
             except Exception as e:
                 st.error(f"❌ Error prediksi massal: {e}")
+
